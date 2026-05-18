@@ -1,0 +1,79 @@
+name: Fix Newlines
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+    
+jobs:
+  fix-newlines:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine changed files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          fi
+
+          echo "$CHANGED" | sed '/^$/d' > changed_files.txt
+
+      - name: Normalize trailing newlines
+        run: |
+          FIXED=0
+
+          while IFS= read -r f; do
+            # Skip deleted or non-regular files
+            if [ ! -f "$f" ]; then
+              continue
+            fi
+
+            # Skip binary files
+            if ! grep -qI . "$f"; then
+              continue
+            fi
+
+            # Remove all trailing empty lines
+            sed -i ':a;/^\n*$/{$d;N;ba}' "$f"
+
+            # Ensure exactly one newline at EOF
+            printf '\n' >> "$f"
+
+            # Check if file changed
+            if ! git diff --quiet "$f"; then
+              echo "Fixed: $f"
+              FIXED=1
+            fi
+
+          done < changed_files.txt
+
+          rm -f changed_files.txt
+          git restore --staged changed_files.txt 2>/dev/null || true
+
+          if [ $FIXED -eq 0 ]; then
+            echo "No fixes needed"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "fix lines" || true
+
+      - name: Push changes
+        if: success()
+        run: git push
